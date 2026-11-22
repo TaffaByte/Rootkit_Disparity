@@ -51,11 +51,16 @@ static __always_inline void record_sched(__u32 pid, __u32 tgid, const char *src)
 	bpf_map_update_elem(&sched_pids, &pid, &ev, BPF_ANY);
 }
 
-SEC("tp/sched/sched_switch")
-int handle_sched_switch(struct trace_event_raw_sched_switch *ctx)
+SEC("tp_btf/sched_switch")
+int BPF_PROG(handle_sched_switch, bool preempt, struct task_struct *prev,
+	     struct task_struct *next)
 {
-	/* next_pid is the task about to run; record it as "scheduled". */
-	record_sched((__u32)ctx->next_pid, 0, ctx->next_comm);
+	__u32 pid = BPF_CORE_READ(next, pid);
+	__u32 tgid = BPF_CORE_READ(next, tgid);
+	char comm[TASK_COMM_LEN];
+
+	BPF_CORE_READ_STR_INTO(&comm, next, comm);
+	record_sched(pid, tgid, comm);
 	return 0;
 }
 
