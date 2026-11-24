@@ -100,10 +100,10 @@ int BPF_PROG(on_vfs_open, const struct path *path, struct file *file)
 	return 0;
 }
 
-/* kprobe ext4_lookup(struct inode *dir, struct dentry *dentry, unsigned flags) */
-SEC("kprobe/ext4_lookup")
-int BPF_KPROBE(on_ext4_lookup, struct inode *dir, struct dentry *dentry,
-	       unsigned int flags)
+/* fentry ext4_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags) */
+SEC("fentry/ext4_lookup")
+int BPF_PROG(on_ext4_lookup, struct inode *dir, struct dentry *dentry,
+	     unsigned int flags)
 {
 	__u64 parent_ino = BPF_CORE_READ(dir, i_ino);
 
