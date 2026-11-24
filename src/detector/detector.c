@@ -230,14 +230,20 @@ static void reconcile_pids(struct detector_bpf *skel)
 		if (bpf_map_lookup_elem(mfd, &key, &ev) == 0) {
 			__u32 pid = key;
 			/* alive out-of-band, but absent from /proc listing? */
-			if (pid != (__u32)getpid() && kill(pid, 0) == 0 &&
-			    !pid_visible(pid)) {
-				struct pid_strike *p = pstk_get(pid);
-				if (p && !p->reported) {
-					if (++p->strikes >= env.confirm) {
-						alert("hidden_pid", ev.comm, pid, 0);
-						p->reported = 1;
+			if (pid != (__u32)getpid() && kill(pid, 0) == 0) {
+				char pbuf[32];
+				snprintf(pbuf, sizeof(pbuf), "/proc/%u", pid);
+				if (access(pbuf, F_OK) != 0) {  /* genuinely absent from /proc NOW */
+					struct pid_strike *p = pstk_get(pid);
+					if (p && !p->reported) {
+						if (++p->strikes >= env.confirm) {
+							alert("hidden_pid", ev.comm, pid, 0);
+							p->reported = 1;
+						}
 					}
+				} else {
+					struct pid_strike *p = pstk_get(pid);
+					if (p) p->strikes = 0;  /* still visible → reset */
 				}
 			}
 		}
