@@ -1,0 +1,43 @@
+{
+  "static_file": {
+    "scenario": "static_file",
+    "trials": 3,
+    "detected": 2,
+    "detection_rate": 0.6667,
+    "mttd_mean_s": 33.2852,
+    "mttd_stdev_s": 0.0077,
+    "false_positives": 0
+  },
+  "static_pid": {
+    "scenario": "static_pid",
+    "trials": 3,
+    "detected": 0,
+    "detection_rate": 0.0,
+    "mttd_mean_s": "",
+    "mttd_stdev_s": "",
+    "false_positives": 0
+  },
+  "pulsed": {
+    "scenario": "pulsed",
+    "trials": 3,
+    "detected": 2,
+    "detection_rate": 0.6667,
+    "mttd_mean_s": 33.3201,
+    "mttd_stdev_s": 0.0506,
+    "false_positives": 0
+  },
+  "pid_recycle": {
+    "scenario": "pid_recycle",
+    "trials": 3,
+    "detected": 0,
+    "detection_rate": 0.0,
+    "mttd_mean_s": "",
+    "mttd_stdev_s": "",
+    "false_positives": 0
+  },
+  "overhead": {
+    "off": 50.03,
+    "on": 74.39,
+    "delta_pct": 24.36
+  }
+}

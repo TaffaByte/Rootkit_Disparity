@@ -1,3 +1,12 @@
-{"ts":1795563761.416396498,"type":"hidden_file","name":"rootkit_persist","id":0,"scenario":"static_file"}
-{"ts":1795563795.322966107,"type":"hidden_file","name":"rootkit_persist","id":0,"scenario":"static_file"}
-{"ts":1795563829.233425923,"type":"hidden_file","name":"rootkit_persist","id":0,"scenario":"static_file"}
+{"ts":1795565881.966179713,"type":"hidden_file","name":"rootkit_persist","id":0,"scenario":"static_file"}
+{"ts":1795565915.708950146,"type":"hidden_file","name":"rootkit_persist","id":0,"scenario":"static_file"}
+{"ts":1795565949.437184789,"type":"hidden_file","name":"rootkit_persist","id":0,"scenario":"static_file"}
+{"ts":1795565983.189113785,"type":"hidden_pid","name":"cldd-worker","id":3425748,"scenario":"static_pid"}
+{"ts":1795566016.909762694,"type":"hidden_pid","name":"cldd-worker","id":3451235,"scenario":"static_pid"}
+{"ts":1795566050.637680932,"type":"hidden_pid","name":"cldd-worker","id":3476438,"scenario":"static_pid"}
+{"ts":1795566084.436175585,"type":"hidden_file","name":"rootkit_pulse","id":0,"scenario":"pulsed"}
+{"ts":1795566118.153746481,"type":"hidden_file","name":"rootkit_pulse","id":0,"scenario":"pulsed"}
+{"ts":1795566151.936435064,"type":"hidden_file","name":"rootkit_pulse","id":0,"scenario":"pulsed"}
+{"ts":1795566185.910805594,"type":"hidden_pid","name":"cldd-worker","id":3573743,"scenario":"pid_recycle"}
+{"ts":1795566219.867352533,"type":"hidden_pid","name":"cldd-worker","id":3609994,"scenario":"pid_recycle"}
+{"ts":1795566253.710575397,"type":"hidden_pid","name":"cldd-worker","id":3648700,"scenario":"pid_recycle"}

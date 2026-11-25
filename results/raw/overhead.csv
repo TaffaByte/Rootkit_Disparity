@@ -1,3 +1,3 @@
 scenario,detector,cpu_busy_pct
-overhead,off,49.97
-overhead,on,99.98
+overhead,off,50.03
+overhead,on,74.39

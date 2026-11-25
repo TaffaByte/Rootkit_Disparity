@@ -1,0 +1,5 @@
+scenario,trial,mttd_s
+static_file,2,33.2929
+static_file,3,33.2776
+pulsed,2,33.2696
+pulsed,3,33.3707

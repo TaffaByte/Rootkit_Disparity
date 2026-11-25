@@ -1,0 +1,5 @@
+scenario,trials,detected,detection_rate,mttd_mean_s,mttd_stdev_s,false_positives
+static_file,3,2,0.6667,33.2852,0.0077,0
+static_pid,3,0,0.0,,,0
+pulsed,3,2,0.6667,33.3201,0.0506,0
+pid_recycle,3,0,0.0,,,0

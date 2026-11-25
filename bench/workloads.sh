@@ -7,7 +7,13 @@
 
 WL_TMP="${WL_TMP:-/tmp/cldd-churn}"
 
-wl_stop() { local p="$1"; [[ -n "$p" ]] && kill -- -"$p" 2>/dev/null; wait "$p" 2>/dev/null; }
+wl_stop() {
+    local p="$1"
+    [[ -n "$p" ]] || return
+    pkill -P "$p" 2>/dev/null
+    kill "$p" 2>/dev/null
+    wait "$p" 2>/dev/null
+}
 
 # Rapid git activity: init a repo and churn commits/branches (file create/stat/unlink).
 wl_git() {
