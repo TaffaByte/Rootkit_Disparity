@@ -69,9 +69,7 @@ static struct gt_file gt[GT_CAP];
 struct pid_strike { __u32 pid; int strikes; int reported; };
 static struct pid_strike pstk[GT_CAP];
 
-/* Candidate snapshot: sched_pids entries that are alive and not us.
- * Captured BEFORE the fresh /proc scan so the two views are maximally
- * close in time (kills the daemon-fork TOCTOU false positive). */
+/* ---- alive-candidate snapshot (collected before the fresh /proc scan) -- */
 struct pid_cand {
 	__u32 pid;
 	char  comm[TASK_COMM_LEN];
@@ -110,7 +108,7 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
 	switch (key) {
 	case 'w':
 		if (n_watch < MAX_WATCH) {
-			snprintf(watches[n_watch].path, sizeof(watches[0].path), "%s", arg);
+			strncpy(watches[n_watch].path, arg, sizeof(watches[0].path) - 1);
 			watches[n_watch].is_proc = (strcmp(arg, "/proc") == 0);
 			n_watch++;
 		}
@@ -163,7 +161,7 @@ static void gt_upsert(__u64 pino, const char *name, __u64 ns)
 		if (!g->used) {
 			g->used = 1; g->parent_ino = pino; g->last_ns = ns;
 			g->strikes = 0; g->reported = 0;
-			snprintf(g->name, sizeof(g->name), "%s", name);
+			strncpy(g->name, name, MAX_NAME_LEN - 1);
 			return;
 		}
 	}
@@ -196,7 +194,23 @@ static int enum_dir(const char *path, void (*cb)(const char *, int, void *), voi
 	return 0;
 }
 
-/* ---- /proc pid reconciliation ------------------------------------------ */
+/* ---- /proc pid snapshot ------------------------------------------------ */
+static __u32 visible_pids[65536];
+static int   n_visible;
+
+static void collect_pid(const char *name, int type, void *arg)
+{
+	if (name[0] < '0' || name[0] > '9') return;
+	char *end; long v = strtol(name, &end, 10);
+	if (*end == '\0' && v > 0 && n_visible < 65536)
+		visible_pids[n_visible++] = (__u32)v;
+}
+static int pid_visible(__u32 pid)
+{
+	for (int i = 0; i < n_visible; i++)
+		if (visible_pids[i] == pid) return 1;
+	return 0;
+}
 static struct pid_strike *pstk_get(__u32 pid)
 {
 	unsigned h = pid % GT_CAP;
@@ -208,6 +222,7 @@ static struct pid_strike *pstk_get(__u32 pid)
 	return NULL;
 }
 
+/* ---- pid reconciliation ------------------------------------------------ */
 static void reconcile_pids(struct detector_bpf *skel)
 {
 	int mfd = bpf_map__fd(skel->maps.sched_pids);
@@ -234,14 +249,13 @@ static void reconcile_pids(struct detector_bpf *skel)
 		have = more;
 	}
 
-	/* Phase 2: fresh /proc snapshot, taken AFTER candidate collection so
-	 * any PID in `candidates` had its /proc entry created in the interim. */
+	/* Phase 2: fresh /proc snapshot, taken AFTER candidate collection. */
 	n_visible = 0;
 	enum_dir("/proc", collect_pid, NULL);
 
 	/* Phase 3: reconcile. Visible => reset strikes/reported (handles
 	 * pulse-off and PID recycle). Hidden and not yet reported => strike.
-	 * Hidden and already reported => silent (no alert spam). */
+	 * Hidden and already reported => silent. */
 	for (int i = 0; i < n_cand; i++) {
 		__u32 pid = candidates[i].pid;
 		struct pid_strike *p = pstk_get(pid);
@@ -266,8 +280,7 @@ static int   n_vis;
 static void collect_name(const char *name, int type, void *arg)
 {
 	if (!strcmp(name, ".") || !strcmp(name, "..")) return;
-	if (n_vis < 4096)
-		snprintf(vis_names[n_vis++], MAX_NAME_LEN, "%s", name);
+	if (n_vis < 4096) strncpy(vis_names[n_vis++], name, MAX_NAME_LEN - 1);
 }
 static int name_visible(const char *name)
 {
@@ -295,9 +308,6 @@ static void reconcile_files(struct watch *w)
 		int f_exists = (faccessat(dfd, g->name, F_OK, 0) == 0);
 
 		if (!f_exists) {
-			/* Deleted or renamed on disk — reset tracking. The
-			 * gt[] entry stays so future re-creations are picked
-			 * up by the ringbuf callback (gt_upsert updates it). */
 			g->strikes  = 0;
 			g->reported = 0;
 		} else if (!name_visible(g->name)) {
@@ -308,9 +318,6 @@ static void reconcile_files(struct watch *w)
 				}
 			}
 		} else {
-			/* Visible again — rootkit pulsed off, or this is a
-			 * fresh file that happens to share the name. Reset so
-			 * a re-hide fires a fresh alert. */
 			g->strikes  = 0;
 			g->reported = 0;
 		}
@@ -355,7 +362,7 @@ int main(int argc, char **argv)
 	       n_watch, env.interval_ms, env.confirm, env.scenario);
 
 	while (!stop) {
-		ring_buffer__poll(rb, env.interval_ms);   /* drains + paces */
+		ring_buffer__poll(rb, env.interval_ms);
 		for (int i = 0; i < n_watch; i++) {
 			if (watches[i].is_proc) reconcile_pids(skel);
 			else                    reconcile_files(&watches[i]);
