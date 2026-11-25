@@ -1,31 +1,19 @@
 #!/usr/bin/env python3
-"""metrics.py - turn raw run data into the evaluation metrics.
+"""metrics.py - turn raw run data into evaluation metrics.
 
-Reads:
-    results/raw/markers.jsonl                 planted artifacts (ground truth)
-    results/raw/alerts_<scenario>_<trial>.jsonl   detector alerts
-    results/raw/overhead.csv                  detector-off vs on CPU
-
-Writes:
-    results/metrics.csv      one row per scenario (detection rate, MTTD, FP)
-    results/mttd_raw.csv     every matched (scenario, trial, mttd_s)
-    results/summary.json     machine-readable rollup
-
-Definitions:
-    detection rate = trials where the planted artifact was flagged / trials
-    MTTD           = alert.ts - marker.ts for the matching alert (seconds)
-    false positive = an alert that matches no planted marker in that scenario
+Trial-aware marker matching: markers carry a "trial" field from
+scenarios.sh; if missing, infer from chronological order. Alerts only
+match markers from the SAME trial, and only if 0 <= alert.ts - marker.ts
+<= DURATION + BUFFER. This prevents cross-trial contamination that
+inflated MTTD in earlier versions.
 """
-import csv
-import glob
-import json
-import os
-import re
-import statistics as st
+import csv, glob, json, os, re, statistics as st
 from collections import defaultdict
 
-RAW = "results/raw"
+RAW       = "results/raw"
 SCENARIOS = ["static_file", "static_pid", "pulsed", "pid_recycle"]
+DURATION  = int(os.environ.get("DURATION", "30"))
+BUFFER    = 5
 
 
 def load_jsonl(path):
@@ -44,10 +32,19 @@ def load_jsonl(path):
 
 
 def key_of(ev):
-    """Identity of a hidden entity: files by name, pids by id."""
     if ev["type"] == "hidden_pid":
         return ("hidden_pid", str(ev["id"]))
     return ("hidden_file", ev["name"])
+
+
+def assign_trial_numbers(markers_by_scen):
+    """If markers lack a trial field, infer from chronological order."""
+    for scen, ms in markers_by_scen.items():
+        if any("trial" in m for m in ms):
+            continue
+        ms_sorted = sorted(ms, key=lambda x: x["ts"])
+        for i, m in enumerate(ms_sorted, 1):
+            m["trial"] = i
 
 
 def main():
@@ -55,30 +52,33 @@ def main():
     markers_by_scen = defaultdict(list)
     for m in markers:
         markers_by_scen[m["scenario"]].append(m)
+    assign_trial_numbers(markers_by_scen)
 
-    rows = []
-    mttd_raw = []
-    summary = {}
+    rows, mttd_raw, summary = [], [], {}
 
     for scen in SCENARIOS:
         trial_files = sorted(glob.glob(f"{RAW}/alerts_{scen}_*.jsonl"))
         n_trials = len(trial_files)
-        detected = 0
-        mttds = []
-        false_positives = 0
+        scen_markers = markers_by_scen.get(scen, [])
+        n_markers = len(scen_markers)
+        if n_markers != n_trials:
+            print(f"WARN: {scen}: {n_trials} trial files but {n_markers} markers",
+                  file=__import__("sys").stderr)
+
+        detected, mttds, fps = 0, [], 0
 
         for tf in trial_files:
             trial = int(re.search(r"_(\d+)\.jsonl$", tf).group(1))
             alerts = load_jsonl(tf)
-            scen_markers = markers_by_scen.get(scen, [])
-            planted_keys = {key_of(m) for m in scen_markers}
+            trial_markers = [m for m in scen_markers if m.get("trial") == trial]
+            planted_keys = {key_of(m) for m in trial_markers}
 
             matched_this_trial = False
             for a in alerts:
                 k = key_of(a)
-                # nearest earlier marker with same identity
-                cands = [m for m in scen_markers
-                         if key_of(m) == k and m["ts"] <= a["ts"]]
+                cands = [m for m in trial_markers
+                         if key_of(m) == k
+                         and 0 <= a["ts"] - m["ts"] <= DURATION + BUFFER]
                 if cands:
                     m = max(cands, key=lambda x: x["ts"])
                     dt = a["ts"] - m["ts"]
@@ -88,17 +88,17 @@ def main():
                     mttds.append(dt)
                     mttd_raw.append((scen, trial, round(dt, 4)))
                 elif k not in planted_keys:
-                    false_positives += 1
+                    fps += 1
 
         det_rate = (detected / n_trials) if n_trials else 0.0
         row = {
-            "scenario": scen,
-            "trials": n_trials,
-            "detected": detected,
+            "scenario":       scen,
+            "trials":         n_trials,
+            "detected":       detected,
             "detection_rate": round(det_rate, 4),
-            "mttd_mean_s": round(st.mean(mttds), 4) if mttds else "",
-            "mttd_stdev_s": round(st.pstdev(mttds), 4) if len(mttds) > 1 else "",
-            "false_positives": false_positives,
+            "mttd_mean_s":    round(st.mean(mttds), 4) if mttds else "",
+            "mttd_stdev_s":   round(st.pstdev(mttds), 4) if len(mttds) > 1 else "",
+            "false_positives": fps,
         }
         rows.append(row)
         summary[scen] = row
@@ -108,13 +108,11 @@ def main():
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
-
     with open("results/mttd_raw.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["scenario", "trial", "mttd_s"])
         w.writerows(mttd_raw)
 
-    # overhead
     overhead = {}
     ovp = f"{RAW}/overhead.csv"
     if os.path.exists(ovp):
@@ -128,7 +126,6 @@ def main():
     with open("results/summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    # console table
     print("\n== Evaluation summary ==")
     print(f"{'scenario':<14}{'trials':>7}{'det.rate':>10}{'MTTD(s)':>10}{'±stdev':>9}{'FP':>5}")
     for r in rows:

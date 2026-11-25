@@ -66,6 +66,7 @@ for scen in "${SCENARIOS[@]}"; do
   for t in $(seq 1 "$TRIALS"); do
 	echo "[trial] $scen #$t"
 	alerts="results/raw/alerts_${scen}_${t}.jsonl"; : > "$alerts"
+	export TRIAL="$t" SCEN="$scen" DURATION
 
 	"$DETECTOR" --watch /proc --watch "$DEMO" --interval-ms "$INTERVAL_MS" \
 		--confirm "$CONFIRM" --scenario "$scen" --out "$alerts" >/dev/null 2>&1 &

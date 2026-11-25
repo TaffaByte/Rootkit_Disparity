@@ -233,16 +233,22 @@ static void reconcile_pids(struct detector_bpf *skel)
 	/* Phase 1: gather alive candidates from the kernel ground-truth map.
 	 * We do NOT take the /proc snapshot yet — that would reintroduce the
 	 * race (child forked after snapshot but before map walk). */
-	int have = (bpf_map_get_next_key(mfd, NULL, &key) == 0);
+			int have = (bpf_map_get_next_key(mfd, NULL, &key) == 0);
 	while (have) {
 		int more = (bpf_map_get_next_key(mfd, &key, &next) == 0);
 		if (bpf_map_lookup_elem(mfd, &key, &ev) == 0) {
 			__u32 pid = key;
-			if (pid != (__u32)getpid() && kill(pid, 0) == 0 &&
-			    n_cand < 65536) {
-				candidates[n_cand].pid = pid;
-				memcpy(candidates[n_cand].comm, ev.comm, TASK_COMM_LEN);
-				n_cand++;
+			if (pid == (__u32)getpid()) {
+				key = next; have = more; continue;
+			}
+			if (kill(pid, 0) == 0) {
+				if (n_cand < 65536) {
+					candidates[n_cand].pid = pid;
+					memcpy(candidates[n_cand].comm, ev.comm, TASK_COMM_LEN);
+					n_cand++;
+				}
+			} else if (errno == ESRCH) {
+				bpf_map_delete_elem(mfd, &key);
 			}
 		}
 		key = next;
@@ -290,9 +296,12 @@ static int name_visible(const char *name)
 
 static void reconcile_files(struct watch *w)
 {
+	struct stat st;
+	if (stat(w->path, &st) == 0)
+		w->ino = st.st_ino;
+
 	int dfd = open(w->path, O_RDONLY | O_DIRECTORY);
-	if (dfd < 0)
-		return;
+	if (dfd < 0) return;
 
 	n_vis = 0;
 	enum_dir(w->path, collect_name, NULL);
@@ -361,13 +370,29 @@ int main(int argc, char **argv)
 	printf("[detector] watching %d dir(s), interval=%dms confirm=%d scenario=%s\n",
 	       n_watch, env.interval_ms, env.confirm, env.scenario);
 
+		struct timespec last_rec;
+	clock_gettime(CLOCK_MONOTONIC, &last_rec);
+
 	while (!stop) {
-		ring_buffer__poll(rb, env.interval_ms);
+		struct timespec now;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		long elapsed_ms = (now.tv_sec - last_rec.tv_sec) * 1000L +
+		                  (now.tv_nsec - last_rec.tv_nsec) / 1000000L;
+
+		if (elapsed_ms < env.interval_ms) {
+			ring_buffer__poll(rb, env.interval_ms - elapsed_ms);
+			continue;
+		}
+
+		ring_buffer__poll(rb, 0);
+
 		for (int i = 0; i < n_watch; i++) {
 			if (watches[i].is_proc) reconcile_pids(skel);
 			else                    reconcile_files(&watches[i]);
 		}
+		last_rec = now;
 	}
+	
 	printf("\n[detector] stopped.\n");
 
 cleanup:

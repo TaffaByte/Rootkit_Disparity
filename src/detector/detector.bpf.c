@@ -55,6 +55,11 @@ SEC("tp_btf/sched_switch")
 int BPF_PROG(handle_sched_switch, bool preempt, struct task_struct *prev,
 	     struct task_struct *next)
 {
+	/* Skip kernel threads: no userspace mm, not visible in /proc.
+	 * Recording them causes hidden_pid false positives. */
+	if (!BPF_CORE_READ(next, mm))
+		return 0;
+
 	__u32 pid = BPF_CORE_READ(next, pid);
 	__u32 tgid = BPF_CORE_READ(next, tgid);
 	char comm[TASK_COMM_LEN];

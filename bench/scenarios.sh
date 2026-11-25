@@ -15,13 +15,13 @@ MARKERS="${MARKERS:-results/raw/markers.jsonl}"
 
 _now() { date +%s.%N; }
 _marker() { # type name id scenario
-	printf '{"ts":%s,"type":"%s","name":"%s","id":%s,"scenario":"%s"}\n' \
-		"$(_now)" "$1" "$2" "${3:-0}" "$4" >> "$MARKERS"
+	printf '{"ts":%s,"type":"%s","name":"%s","id":%s,"scenario":"%s","trial":%s}\n' \
+		"$(_now)" "$1" "$2" "${3:-0}" "$4" "${TRIAL:-0}" >> "$MARKERS"
 }
 
-# Spawn a long-lived benign-looking worker; echo its PID.
+# In bench/scenarios.sh
 _spawn_worker() {
-	( exec -a cldd-worker sleep 100000 ) >/dev/null 2>&1 &
+	( exec -a cldd-worker bash -c 'while :; do sleep 0.1; done' ) >/dev/null 2>&1 &
 	echo $!
 }
 
