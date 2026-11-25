@@ -21,7 +21,7 @@ _marker() { # type name id scenario
 
 # Spawn a long-lived benign-looking worker; echo its PID.
 _spawn_worker() {
-	( exec -a cldd-worker sleep 100000 ) &
+	( exec -a cldd-worker sleep 100000 ) >/dev/null 2>&1 &
 	echo $!
 }
 
@@ -62,7 +62,7 @@ scen_pid_recycle() {
 	local w; w="$(_spawn_worker)"
 	sudo "$ROOTKIT" --hide-pid "$w" >/dev/null 2>&1 &
 	local rk=$!
-	( while :; do ( exec -a recycled sleep 0.05 ) & done ) &   # recycled pids
+	( while :; do ( exec -a recycled sleep 0.05 ) & done ) >/dev/null 2>&1 &   # recycled pids
 	local churn=$!
 	sleep 0.5
 	_marker hidden_pid cldd-worker "$w" pid_recycle

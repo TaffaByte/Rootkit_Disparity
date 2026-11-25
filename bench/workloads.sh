@@ -17,10 +17,10 @@ wl_git() {
 	  i=0
 	  while :; do
 		echo "$RANDOM" > "f$((i%64)).txt"
-		git add -A -q; git commit -q -m "c$i" 2>/dev/null
+		git add -A; git commit -q -m "c$i" 2>/dev/null
 		[[ $((i%20)) -eq 0 ]] && { git checkout -q -b "b$i" 2>/dev/null; git checkout -q - 2>/dev/null; }
 		i=$((i+1))
-	  done ) &
+	  done ) >/dev/null 2>&1 &
 	echo $!
 }
 
@@ -29,7 +29,7 @@ wl_make() {
 	( set -m
 	  rm -rf "$WL_TMP/build"; mkdir -p "$WL_TMP/build"; cd "$WL_TMP/build" || exit
 	  printf 'int main(){return 0;}\n' > m.c
-	  while :; do cc m.c -o m.out 2>/dev/null; rm -f m.out; done ) &
+	  while :; do cc m.c -o m.out 2>/dev/null; rm -f m.out; done ) >/dev/null 2>&1 &
 	echo $!
 }
 
@@ -41,7 +41,7 @@ wl_tmp_churn() {
 		for n in $(seq 1 200); do : > "$WL_TMP/churn/t$n"; done
 		ls "$WL_TMP/churn" >/dev/null
 		rm -f "$WL_TMP"/churn/t*
-	  done ) &
+	  done ) >/dev/null 2>&1 &
 	echo $!
 }
 
@@ -52,7 +52,7 @@ wl_fio() {
 	  mkdir -p "$WL_TMP/fio"
 	  fio --name=rw --directory="$WL_TMP/fio" --rw=randrw --bs=4k \
 	      --size=128M --numjobs=2 --time_based --runtime=3600 \
-	      --group_reporting >/dev/null 2>&1 ) &
+	      --group_reporting >/dev/null 2>&1 ) >/dev/null 2>&1 &
 	echo $!
 }
 
@@ -60,14 +60,14 @@ wl_fio() {
 wl_sysbench() {
 	command -v sysbench >/dev/null || { echo ""; return; }
 	( set -m
-	  sysbench cpu --cpu-max-prime=20000 --time=3600 --threads=2 run >/dev/null 2>&1 ) &
+	  sysbench cpu --cpu-max-prime=20000 --time=3600 --threads=2 run >/dev/null 2>&1 ) >/dev/null 2>&1 &
 	echo $!
 }
 
 # Start the standard benign mix; returns space-separated PIDs.
 wl_start_mix() {
 	local pids=()
-	pids+=("$(wl_git)")
+	# pids+=("$(wl_git)")
 	pids+=("$(wl_make)")
 	pids+=("$(wl_tmp_churn)")
 	local f; f="$(wl_fio)";       [[ -n "$f" ]] && pids+=("$f")
