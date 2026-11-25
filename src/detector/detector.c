@@ -32,7 +32,6 @@
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
-#include <signal.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include "common.h"
@@ -102,7 +101,7 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
 	switch (key) {
 	case 'w':
 		if (n_watch < MAX_WATCH) {
-			strncpy(watches[n_watch].path, arg, sizeof(watches[0].path) - 1);
+			snprintf(watches[n_watch].path, sizeof(watches[0].path), "%s", arg);
 			watches[n_watch].is_proc = (strcmp(arg, "/proc") == 0);
 			n_watch++;
 		}
@@ -155,7 +154,7 @@ static void gt_upsert(__u64 pino, const char *name, __u64 ns)
 		if (!g->used) {
 			g->used = 1; g->parent_ino = pino; g->last_ns = ns;
 			g->strikes = 0; g->reported = 0;
-			strncpy(g->name, name, MAX_NAME_LEN - 1);
+			snprintf(g->name, sizeof(g->name), "%s", name);
 			return;
 		}
 	}
@@ -189,20 +188,6 @@ static int enum_dir(const char *path, void (*cb)(const char *, int, void *), voi
 }
 
 /* ---- /proc pid reconciliation ------------------------------------------ */
-static __u32 visible_pids[65536];
-static int   n_visible;
-static void collect_pid(const char *name, int type, void *arg)
-{
-	if (name[0] < '0' || name[0] > '9') return;
-	char *end; long v = strtol(name, &end, 10);
-	if (*end == '\0' && v > 0 && n_visible < 65536)
-		visible_pids[n_visible++] = (__u32)v;
-}
-static int pid_visible(__u32 pid)
-{
-	for (int i = 0; i < n_visible; i++) if (visible_pids[i] == pid) return 1;
-	return 0;
-}
 static struct pid_strike *pstk_get(__u32 pid)
 {
 	unsigned h = pid % GT_CAP;
@@ -220,20 +205,17 @@ static void reconcile_pids(struct detector_bpf *skel)
 	__u32 key = 0, next;
 	struct sched_event ev;
 
-	n_visible = 0;
-	enum_dir("/proc", collect_pid, NULL);
-
 	/* iterate every scheduled pid in the kernel ground-truth map */
 	int have = (bpf_map_get_next_key(mfd, NULL, &key) == 0);
 	while (have) {
 		int more = (bpf_map_get_next_key(mfd, &key, &next) == 0);
 		if (bpf_map_lookup_elem(mfd, &key, &ev) == 0) {
 			__u32 pid = key;
-			/* alive out-of-band, but absent from /proc listing? */
+			/* alive out-of-band, but absent from /proc? */
 			if (pid != (__u32)getpid() && kill(pid, 0) == 0) {
 				char pbuf[32];
 				snprintf(pbuf, sizeof(pbuf), "/proc/%u", pid);
-				if (access(pbuf, F_OK) != 0) {  /* genuinely absent from /proc NOW */
+				if (access(pbuf, F_OK) != 0) {
 					struct pid_strike *p = pstk_get(pid);
 					if (p && !p->reported) {
 						if (++p->strikes >= env.confirm) {
@@ -243,7 +225,7 @@ static void reconcile_pids(struct detector_bpf *skel)
 					}
 				} else {
 					struct pid_strike *p = pstk_get(pid);
-					if (p) p->strikes = 0;  /* still visible → reset */
+					if (p) p->strikes = 0;
 				}
 			}
 		}
@@ -258,7 +240,8 @@ static int   n_vis;
 static void collect_name(const char *name, int type, void *arg)
 {
 	if (!strcmp(name, ".") || !strcmp(name, "..")) return;
-	if (n_vis < 4096) strncpy(vis_names[n_vis++], name, MAX_NAME_LEN - 1);
+	if (n_vis < 4096)
+		snprintf(vis_names[n_vis++], MAX_NAME_LEN, "%s", name);
 }
 static int name_visible(const char *name)
 {
@@ -268,8 +251,13 @@ static int name_visible(const char *name)
 
 static void reconcile_files(struct watch *w)
 {
+	struct stat st;
 	int dfd = open(w->path, O_RDONLY | O_DIRECTORY);
 	if (dfd < 0) return;
+
+	/* refresh inode in case watch dir was created/recreated after startup */
+	if (fstat(dfd, &st) == 0)
+		w->ino = st.st_ino;
 
 	n_vis = 0;
 	enum_dir(w->path, collect_name, NULL);
