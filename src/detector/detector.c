@@ -69,6 +69,15 @@ static struct gt_file gt[GT_CAP];
 struct pid_strike { __u32 pid; int strikes; int reported; };
 static struct pid_strike pstk[GT_CAP];
 
+/* Candidate snapshot: sched_pids entries that are alive and not us.
+ * Captured BEFORE the fresh /proc scan so the two views are maximally
+ * close in time (kills the daemon-fork TOCTOU false positive). */
+struct pid_cand {
+	__u32 pid;
+	char  comm[TASK_COMM_LEN];
+};
+static struct pid_cand candidates[65536];
+
 /* ---- watched dirs ------------------------------------------------------ */
 struct watch { char path[256]; int is_proc; __u64 ino; };
 static struct watch watches[MAX_WATCH];
@@ -204,33 +213,50 @@ static void reconcile_pids(struct detector_bpf *skel)
 	int mfd = bpf_map__fd(skel->maps.sched_pids);
 	__u32 key = 0, next;
 	struct sched_event ev;
+	int n_cand = 0;
 
-	/* iterate every scheduled pid in the kernel ground-truth map */
+	/* Phase 1: gather alive candidates from the kernel ground-truth map.
+	 * We do NOT take the /proc snapshot yet — that would reintroduce the
+	 * race (child forked after snapshot but before map walk). */
 	int have = (bpf_map_get_next_key(mfd, NULL, &key) == 0);
 	while (have) {
 		int more = (bpf_map_get_next_key(mfd, &key, &next) == 0);
 		if (bpf_map_lookup_elem(mfd, &key, &ev) == 0) {
 			__u32 pid = key;
-			/* alive out-of-band, but absent from /proc? */
-			if (pid != (__u32)getpid() && kill(pid, 0) == 0) {
-				char pbuf[32];
-				snprintf(pbuf, sizeof(pbuf), "/proc/%u", pid);
-				if (access(pbuf, F_OK) != 0) {
-					struct pid_strike *p = pstk_get(pid);
-					if (p && !p->reported) {
-						if (++p->strikes >= env.confirm) {
-							alert("hidden_pid", ev.comm, pid, 0);
-							p->reported = 1;
-						}
-					}
-				} else {
-					struct pid_strike *p = pstk_get(pid);
-					if (p) p->strikes = 0;
-				}
+			if (pid != (__u32)getpid() && kill(pid, 0) == 0 &&
+			    n_cand < 65536) {
+				candidates[n_cand].pid = pid;
+				memcpy(candidates[n_cand].comm, ev.comm, TASK_COMM_LEN);
+				n_cand++;
 			}
 		}
 		key = next;
 		have = more;
+	}
+
+	/* Phase 2: fresh /proc snapshot, taken AFTER candidate collection so
+	 * any PID in `candidates` had its /proc entry created in the interim. */
+	n_visible = 0;
+	enum_dir("/proc", collect_pid, NULL);
+
+	/* Phase 3: reconcile. Visible => reset strikes/reported (handles
+	 * pulse-off and PID recycle). Hidden and not yet reported => strike.
+	 * Hidden and already reported => silent (no alert spam). */
+	for (int i = 0; i < n_cand; i++) {
+		__u32 pid = candidates[i].pid;
+		struct pid_strike *p = pstk_get(pid);
+		if (!p)
+			continue;
+
+		if (pid_visible(pid)) {
+			p->strikes  = 0;
+			p->reported = 0;
+		} else if (!p->reported) {
+			if (++p->strikes >= env.confirm) {
+				alert("hidden_pid", candidates[i].comm, pid, 0);
+				p->reported = 1;
+			}
+		}
 	}
 }
 
@@ -251,28 +277,42 @@ static int name_visible(const char *name)
 
 static void reconcile_files(struct watch *w)
 {
-	struct stat st;
 	int dfd = open(w->path, O_RDONLY | O_DIRECTORY);
-	if (dfd < 0) return;
-
-	/* refresh inode in case watch dir was created/recreated after startup */
-	if (fstat(dfd, &st) == 0)
-		w->ino = st.st_ino;
+	if (dfd < 0)
+		return;
 
 	n_vis = 0;
 	enum_dir(w->path, collect_name, NULL);
 
 	for (int i = 0; i < GT_CAP; i++) {
 		struct gt_file *g = &gt[i];
-		if (!g->used || g->parent_ino != w->ino || g->reported) continue;
-		/* still exists on disk (open-by-name is not hidden) but not listed? */
-		if (faccessat(dfd, g->name, F_OK, 0) == 0 && !name_visible(g->name)) {
-			if (++g->strikes >= env.confirm) {
-				alert("hidden_file", g->name, 0, g->parent_ino);
-				g->reported = 1;
+		if (!g->used || g->parent_ino != w->ino)
+			continue;
+
+		/* Still on disk (open-by-name is not hidden by getdents
+		 * tampering) AND absent from the raw listing => hidden.
+		 * f_exists==0 means deleted or renamed away => benign, reset. */
+		int f_exists = (faccessat(dfd, g->name, F_OK, 0) == 0);
+
+		if (!f_exists) {
+			/* Deleted or renamed on disk — reset tracking. The
+			 * gt[] entry stays so future re-creations are picked
+			 * up by the ringbuf callback (gt_upsert updates it). */
+			g->strikes  = 0;
+			g->reported = 0;
+		} else if (!name_visible(g->name)) {
+			if (!g->reported) {
+				if (++g->strikes >= env.confirm) {
+					alert("hidden_file", g->name, 0, g->parent_ino);
+					g->reported = 1;
+				}
 			}
 		} else {
-			g->strikes = 0;
+			/* Visible again — rootkit pulsed off, or this is a
+			 * fresh file that happens to share the name. Reset so
+			 * a re-hide fires a fresh alert. */
+			g->strikes  = 0;
+			g->reported = 0;
 		}
 	}
 	close(dfd);
