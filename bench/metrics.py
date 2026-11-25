@@ -77,8 +77,8 @@ def main():
             for a in alerts:
                 k = key_of(a)
                 cands = [m for m in trial_markers
-                         if key_of(m) == k
-                         and 0 <= a["ts"] - m["ts"] <= DURATION + BUFFER]
+                    if key_of(m) == k
+                    and -1.0 <= a["ts"] - m["ts"] <= DURATION + BUFFER]
                 if cands:
                     m = max(cands, key=lambda x: x["ts"])
                     dt = a["ts"] - m["ts"]

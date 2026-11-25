@@ -27,11 +27,11 @@ _spawn_worker() {
 
 # 1) Static file hiding: one persistent file, steady hook.
 scen_static_file() {
-	mkdir -p "$DEMO"; echo secret > "$DEMO/rootkit_persist"
+	mkdir -p "$DEMO"
+	_marker hidden_file rootkit_persist 0 static_file   # BEFORE create
+	echo secret > "$DEMO/rootkit_persist"
 	sudo "$ROOTKIT" --prefix rootkit_ >/dev/null 2>&1 &
 	local rk=$!
-	sleep 0.5
-	_marker hidden_file rootkit_persist 0 static_file
 	echo "$rk"
 }
 
