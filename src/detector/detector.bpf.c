@@ -48,7 +48,7 @@ static __always_inline void record_sched(__u32 pid, __u32 tgid, const char *src)
 	ev.pid = pid;
 	ev.tgid = tgid;
 	bpf_probe_read_kernel_str(ev.comm, sizeof(ev.comm), src);
-	bpf_map_update_elem(&sched_pids, &pid, &ev, BPF_ANY);
+	bpf_map_update_elem(&sched_pids, &tgid, &ev, BPF_ANY);
 }
 
 SEC("tp_btf/sched_switch")
